@@ -11,7 +11,7 @@ type RoomId =
 
 type Exit =
   | PassableExit of string * destination: RoomId
-  | LockedExit of string * key : Item * next: Exit
+  | LockedExit of string * key: Item * next: Exit
   | NoExit of string option
 
 type Exits = 
@@ -113,3 +113,74 @@ let gameWorld =
     Player = player }
 
 // Logic
+
+type Result<'TSuccess, 'TFailure> = //Start of Railway
+  | Success of 'TSuccess
+  | Failure of 'TFailure
+
+let bind processFunc lastResult =
+  match lastResult with
+  | Success s -> processFunc s 
+  | Failure f -> Failure f
+
+let (>>=) x f = // equal to |> bind (fun val) 
+  bind f x
+
+let switch processFunc input =
+  Success (processFunc input)
+
+let getRoom world roomId =
+  match world.Rooms.TryFind roomId with
+  | Some room -> Success room
+  | None -> Failure "Room does not exist!"
+
+let describeDetails details =
+  sprintf "\n\n%s\n\n%s\n\n" details.Name details.Description
+
+let extractDetailsFromRoom (room: Room) =
+  room.Details
+
+let describeCurrentRoom world = 
+  world.Player.Location
+  |> getRoom world
+  |> (bind (switch extractDetailsFromRoom) >> bind (switch describeDetails))
+
+let north ({ North = northExit }: Exits) = northExit
+let south ({ South = southExit }: Exits) = southExit
+let east ({ East = eastExit }: Exits) = eastExit
+let west ({ West = westExit }: Exits) = westExit
+
+let getCurrentRoom world =
+  world.Player.Location
+  |> getRoom world
+
+let setCurrentRoom world room =
+  { world with //change world
+      Player = { world.Player with Location = room.Id} } //updates player inside world using the current roomId for the location
+
+let getExit direction exits =
+  match (direction exits) with 
+  | PassableExit (_, roomId) -> Success roomId 
+  | LockedExit (_) -> Failure "There is a locked door in that direction." //(_, _, _ was replaced with _)
+  | NoExit (_) -> Failure "There is no room in that direction"
+
+let move direction world = //Main Pipeline
+  world
+  |> getCurrentRoom
+  >>= switch(fun room -> room.Exits)
+  >>= getExit direction
+  >>= getRoom world
+  >>= switch (setCurrentRoom world)
+
+let displayResult result =
+  match result with
+  | Success s -> printf "%s" s
+  | Failure f -> printf "%s" f
+
+gameWorld
+|> move south
+>>= move north
+>>= move west
+>>= describeCurrentRoom
+|> displayResult
+// |> ignore //throw away result
