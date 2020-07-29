@@ -145,10 +145,11 @@ let describeCurrentRoom world =
   |> getRoom world
   |> (bind (switch extractDetailsFromRoom) >> bind (switch describeDetails))
 
-let north ({ North = northExit }: Exits) = northExit
-let south ({ South = southExit }: Exits) = southExit
-let east ({ East = eastExit }: Exits) = eastExit
-let west ({ West = westExit }: Exits) = westExit
+// let north ({ North = northExit }: Exits) = northExit //more complicated way showing destructuring
+let north exits = exits.North
+let south exits = exits.South
+let east exits = exits.East
+let west exits = exits.West
 
 let getCurrentRoom world =
   world.Player.Location
@@ -177,10 +178,83 @@ let displayResult result =
   | Success s -> printf "%s" s
   | Failure f -> printf "%s" f
 
-gameWorld
-|> move south
->>= move north
->>= move west
->>= describeCurrentRoom
-|> displayResult
+//Game State and Its Modifiers
+type GameEvent = //descriminated union
+  | UpdateState of (World -> Result<World, string>)
+  | ResetState of World
+  | EndGameLoop
+
+let applyUpdate updateFunc worldState =
+  match updateFunc worldState with 
+  | Success newState -> 
+    describeCurrentRoom newState |> displayResult //describe and show new state
+    newState //change to new state
+  | Failure message -> 
+    printfn "\n\n%s\n\n" message //send message
+    worldState //keep current world state
+
+//Game Engine
+type GameEngine(initialState: World) = //Class
+  let gameLoop = 
+    MailboxProcessor.Start(fun inbox -> //Mailbox processor
+      let rec innerLoop worldState = //recursive function
+        async { //computation expression
+          let! eventMsg = inbox.Receive() //can add timeout later
+          match eventMsg with
+          | UpdateState updateFunc -> return! innerLoop (applyUpdate updateFunc worldState) //update the state for recursive function
+          | ResetState newState -> return! innerLoop newState //recall recursive function with new state
+          | EndGameLoop -> return () //return value of type unit to end recursive function
+        }
+      innerLoop initialState) //invoke recursive function for the first time and give initial game world state
+
+  member this.ApplyUpdate(updateFunc) = //member method for sending messages to mailbox proc
+    gameLoop.Post(UpdateState updateFunc)
+
+  member this.ResetState(newState) =
+    gameLoop.Post(ResetState newState)  //member for reseting the state
+
+  member this.Stop() = //member method for ending gameLoop
+    gameLoop.Post(EndGameLoop)
+
+//Call the Game Engine
+let gameEngine = GameEngine(gameWorld) //passes in initial state
+gameEngine.ApplyUpdate(move south) //passes in update message
+
+//Random value
+let rand = System.Random();
+
+//Player Controller
+let playerController =
+  MailboxProcessor.Start(fun inbox ->
+    let rec innerLoop state =
+      async {
+        try
+          let! eventMsg = inbox.Receive(2000) //2 second time out
+          if eventMsg = "Stop" then return ()
+        with 
+        | :? System.TimeoutException ->       // :? is type comparison operator
+          [ "north", north //list of 4 tupples with 2 parts
+            "south", south 
+            "east", east 
+            "west", west] //then gets random from list
+          |> List.item (rand.Next 4)
+          |> fun (dir, dirFunc) -> printfn "Wandering %s..." dir; dirFunc //desctructure item from list and pipes it
+          |> move
+          |> gameEngine.ApplyUpdate
+          
+          do! innerLoop state //call recursive function again to reset after timeout
+      }
+      
+    innerLoop 0)//init innerloop with 0 state
+
+//Game Controls
+gameEngine.ResetState(gameWorld) //Reset world state
+playerController.Post("Stop") //stop the player
+
+// gameWorld
+// |> move south
+// >>= move north
+// >>= move west
+// >>= describeCurrentRoom
+// |> displayResult
 // |> ignore //throw away result
