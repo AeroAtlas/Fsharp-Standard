@@ -196,7 +196,7 @@ let applyUpdate updateFunc worldState =
 //Game Engine
 type GameEngine(initialState: World) = //Class
   let gameLoop = 
-    MailboxProcessor.Start(fun inbox -> 
+    MailboxProcessor.Start(fun inbox -> //Mailbox processor
       let rec innerLoop worldState = //recursive function
         async { //computation expression
           let! eventMsg = inbox.Receive() //can add timeout later
@@ -218,102 +218,46 @@ type GameEngine(initialState: World) = //Class
 
 //Call the Game Engine
 let gameEngine = GameEngine(gameWorld) //passes in initial state
+gameEngine.ApplyUpdate(move south) //passes in update message
+
+//Random value
+let rand = System.Random();
+
+//Player Controller
+let playerController =
+  MailboxProcessor.Start(fun inbox ->
+    let rec innerLoop state =
+      async {
+        try
+          let! eventMsg = inbox.Receive(2000) //2 second time out
+          if eventMsg = "Stop" then return ()
+        with 
+        | :? System.TimeoutException ->       // :? is type comparison operator
+          [ "north", north //list of 4 tupples with 2 parts
+            "south", south 
+            "east", east 
+            "west", west] //then gets random from list
+          |> List.item (rand.Next 4)
+          |> fun (dir, dirFunc) -> printfn "Wandering %s..." dir; dirFunc //desctructure item from list and pipes it
+          |> move
+          |> gameEngine.ApplyUpdate
+          
+          do! innerLoop state //call recursive function again to reset after timeout
+      }
+      
+    innerLoop 0)//init innerloop with 0 state
+
+//Game Controls
+gameEngine.ResetState(gameWorld) //Reset world state
+playerController.Post("Stop") //stop the player
+
+// gameWorld
+// |> move south
+// >>= move north
+// >>= move west
+// >>= describeCurrentRoom
+// |> displayResult
+// |> ignore //throw away result
 
 
-// Command Parsing
-
-type Parser<'a> = Parser of (char list -> Result<'a * char list, string>) //create parser type for any parser
-
-let runParser parser inputChars =
-  let (Parser parserFunc) = parser 
-  parserFunc inputChars
-
-let expectChar expectedChar =
-  let innerParser inputChars = //adds inner function
-    match inputChars with
-    | c :: remainingChars ->      //Decompose the list
-      if c= expectedChar then Success (c, remainingChars)
-      else Failure (sprintf "Expected '%c' , got '%c" expectedChar c)
-    | [] ->
-      Failure (sprintf "Expected '%c', reached the end of input" expectedChar)
-  Parser innerParser //puts our Parser type as our type for our parsers
-
-let stringToCharList str = //turn string to Sequence of characters
-  List.ofSeq str
-
-let orParse parser1 parser2 =
-  let innerParser inputChars = //Check multiple parses
-    match runParser parser1 inputChars with
-    | Success result -> Success result 
-    | Failure _ -> runParser parser2 inputChars
-  Parser innerParser
-
-let ( <|> ) = orParse // () define operator - defines orParse
-
-let choice parserList = //reduce through list of chars to parse them
-  List.reduce orParse parserList 
-
-let anyCharOf validChars = //maps through all chars and puts them in choice
-  validChars
-  |> List.map expectChar
-  |> choice
-
-let andParse parser1 parser2 =
-  let innerParser inputChars =
-    match runParser parser1 inputChars with 
-    | Failure msg -> Failure msg //return error for first char
-    | Success (c1, remaining1) -> //Get correct char and remaining list
-      match runParser parser2 remaining1 with   
-      | Failure msg -> Failure msg //return error for second char
-      | Success (c2, remaining2) -> //Get correct char 2 and remaing list
-        Success((c1, c2), remaining2)
-  Parser innerParser
-
-let ( .>>. ) = andParse
-
-let mapParser mapFunc parser = //map func for parser type
-  let innerParser inputChars =
-    match runParser parser inputChars with 
-    | Failure msg -> Failure msg 
-    | Success (result, remaining) ->
-      Success (mapFunc result, remaining)
-  Parser innerParser
-
-let applyParser funcAsParser paramAsParser =
-  (funcAsParser .>>. paramAsParser) //tuple results of parsers together
-  |> mapParser (fun (f, x) -> f x) //decompose to run function on parameter
-
-let ( <*> ) = applyParser
-
-let returnAsParser result =
-  let innerParser inputChars =
-    Success (result, inputChars)
-  Parser innerParser
-
-let liftToParser2 funcToLift paramAsParser1 paramAsParser2 = //lift function for any func with 2 params
-  returnAsParser funcToLift <*> paramAsParser1 <*> paramAsParser2 //takes 2 Parsers of generic type and creates only 1 for result 
-
-let rec sequenceParsers (parserList: Parser<'a> List): Parser<'a list> = //recursive function w/ tail recursion psuedo-reduce func
-  let cons head rest = head :: rest // combines first to the rest of a list
-  let consAsParser = liftToParser2 cons
-
-  match parserList with 
-  | [] -> returnAsParser[] //if parserListEmpty end
-  | parser :: remainingParsers -> //takes first part of list off and returns remaining
-    consAsParser parser (sequenceParsers remainingParsers)
-
-let charListAsString chars =
-  System.String(List.toArray chars)
-
-let expectString expectedString =
-  expectedString
-  |> stringToCharList
-  |> List.map expectChar 
-  |> sequenceParsers
-  |> mapParser charListAsString
-
-stringToCharList "take"
-|> runParser (expectString "lake" <|> expectString "take")
-|> printfn "%A"
-
-//|> anyCharOf ['a'..'z'] //create list with a through z
+//Fira Code for better F# aesthetic
